@@ -1,0 +1,18 @@
+# --- Manipulación de Datos y Simulación ---
+pandas>=2.0.0
+numpy>=1.24.0
+
+# --- Drivers para las Bases de Datos (NoSQL) ---
+pymongo>=4.5.0
+cassandra-driver>=3.28.0
+neo4j>=5.12.0
+
+# --- Dashboard e Interfaz Gráfica ---
+streamlit>=1.26.0
+streamlit-autorefresh>=0.0.1
+
+# --- Visualización Avanzada (Para los gráficos del Dashboard) ---
+plotly>=5.16.0
+
+# --- Utilidades ---
+python-dotenv>=1.0.0

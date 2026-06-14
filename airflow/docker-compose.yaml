@@ -1,0 +1,60 @@
+services:
+  # 1. Capa Documental: MongoDB
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb_utec
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  # 2. Capa Columnar: Apache Cassandra
+  cassandra:
+    image: cassandra:latest
+    container_name: cassandra_utec
+    ports:
+      - "9042:9042"
+    environment:
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=100M
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+
+  # 3. Capa de Grafos: Neo4j
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j_utec
+    ports:
+      - "7474:7474"   # Interfaz Web
+      - "7687:7687"   # Protocolo Bolt para Python
+    environment:
+      - NEO4J_AUTH=neo4j/password123
+    volumes:
+      - neo4j_data:/data
+
+  # 4. Orquestador: Apache Airflow (Standalone para desarrollo rápido)
+  airflow:
+    image: apache/airflow:2.7.1-python3.10
+    container_name: airflow_utec
+    command: standalone
+
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _PIP_ADDITIONAL_REQUIREMENTS=pymongo cassandra-driver neo4j pandas
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ../data:/opt/airflow/data
+
+    depends_on:
+      - mongodb
+      - cassandra
+      - neo4j
+
+volumes:
+  mongo_data:
+  cassandra_data:
+  neo4j_data:
