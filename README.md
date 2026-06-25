@@ -104,11 +104,11 @@ La orquestación se realiza mediante **Apache Airflow** ejecutado en Docker, gar
 #### 3️⃣ **Persistencia Multimodelo (DAG - Tareas Paralelas)**
 
 **Tarea `load_to_mongodb`**
-- Inserción masiva (bulk insert) de documentos JSON en colección `spotify_events`
+- Inserción masiva (bulk insert) de documentos JSON en colección `raw_events`
 - Índices automáticos en campos frecuentes: `track_id`, `artist_id`, `timestamp`
 
 **Tarea `load_to_cassandra`**
-- Insert en tabla `time_series_events` con clave de partición: `country`
+- Insert en tabla `streams_by_country_genre` con clave de partición: `country`
 - Clustering order: `timestamp DESC` (optimiza rangos temporales)
 - Estrategia de compresión LZ4
 
@@ -233,12 +233,13 @@ proyectobigdata/
    ```
    
    Esta acción crea y arranca:
-   - `airflow-webserver` (puerto 8080)
-   - `airflow-scheduler` (orquestador)
    - `mongodb` (puerto 27017)
    - `cassandra` (puerto 9042)
    - `neo4j` (puerto 7474 UI, 7687 Bolt)
-   - `postgres` (metadatos de Airflow, puerto 5432)
+   - `init-mongodb` (inicialización automática)
+   - `init-cassandra` (inicialización automática)
+   - `init-neo4j` (inicialización automática)
+   - `airflow` (orquestador en modo `standalone`, puerto 8080)
 
 3. **Verificar que Todos los Contenedores Estén Corriendo**
    ```bash
@@ -249,134 +250,22 @@ proyectobigdata/
 
 4. **Esperar a que Airflow Esté Listo (~30-60 segundos)**
    ```bash
-   docker compose logs airflow-webserver | grep "Application startup complete"
+   docker compose logs airflow | grep -E "standalone|admin|Application startup complete"
    ```
+
+5. **Confirmar que la inicialización automática terminó**
+   ```bash
+   docker compose logs init-mongodb init-cassandra init-neo4j
+   ```
+   
+   Debes ver mensajes de éxito para:
+   - `spotify_db.raw_events` en MongoDB
+   - `spotify_analytics.streams_by_country_genre` en Cassandra
+   - constraints e índices en Neo4j
 
 ---
 
-### ✅ Paso 3: Inicializar las Bases de Datos
-
-#### 3a. Inicializar MongoDB
-
-1. **Acceder al Contenedor**
-   ```bash
-   docker exec -it mongodb mongosh
-   ```
-
-2. **Ejecutar el Script de Inicialización**
-   ```javascript
-   // Crear base de datos
-   use spotify_analytics
-
-   // Crear colección con validación
-   db.createCollection("spotify_events", {
-     validator: {
-       $jsonSchema: {
-         bsonType: "object",
-         required: ["track_id", "artist_id", "timestamp"],
-         properties: {
-           track_id: { bsonType: "string" },
-           artist_id: { bsonType: "string" },
-           artist_name: { bsonType: "string" },
-           track_name: { bsonType: "string" },
-           genre: { bsonType: "string" },
-           country: { bsonType: "string" },
-           play_count: { bsonType: "int" },
-           timestamp: { bsonType: "date" }
-         }
-       }
-     }
-   })
-
-   // Crear índices
-   db.spotify_events.createIndex({ track_id: 1 })
-   db.spotify_events.createIndex({ artist_id: 1 })
-   db.spotify_events.createIndex({ timestamp: -1 })
-   db.spotify_events.createIndex({ country: 1 })
-
-   // Salir
-   exit
-   ```
-
-#### 3b. Inicializar Cassandra
-
-1. **Copiar el Script CQL**
-   ```bash
-   docker cp ../scripts/init_cassandra.cql cassandra:/tmp/
-   ```
-
-2. **Ejecutar el Script en el Contenedor**
-   ```bash
-   docker exec -it cassandra cqlsh -f /tmp/init_cassandra.cql
-   ```
-
-3. **Verificar** (opcional)
-   ```bash
-   docker exec -it cassandra cqlsh -e "DESCRIBE KEYSPACE spotify_keyspace;"
-   ```
-
-**Contenido esperado del archivo `init_cassandra.cql`:**
-```sql
-CREATE KEYSPACE IF NOT EXISTS spotify_keyspace
-WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
-
-USE spotify_keyspace;
-
-CREATE TABLE IF NOT EXISTS time_series_events (
-    country TEXT,
-    timestamp TIMESTAMP,
-    track_id TEXT,
-    artist_id TEXT,
-    artist_name TEXT,
-    track_name TEXT,
-    genre TEXT,
-    play_count INT,
-    PRIMARY KEY ((country), timestamp)
-) WITH CLUSTERING ORDER BY (timestamp DESC)
-AND compression = {'sstable_compression': 'LZ4Compressor'};
-
-CREATE INDEX idx_artist_id ON time_series_events(artist_id);
-CREATE INDEX idx_track_id ON time_series_events(track_id);
-```
-
-#### 3c. Inicializar Neo4j
-
-1. **Acceder a la Interfaz Web**
-   - Abrir en el navegador: `http://localhost:7474`
-   - Credenciales por defecto:
-     - **Usuario**: `neo4j`
-     - **Contraseña**: `password123` (o la configurada en `docker-compose.yaml`)
-
-2. **Ejecutar el Script Cypher**
-   - Copiar el contenido del archivo `scripts/init_neo4j.cypher`
-   - Pegarlo en la consola de Neo4j (panel derecho)
-   - Presionar Ctrl+Enter para ejecutar
-
-**Contenido esperado del archivo `init_neo4j.cypher`:**
-```cypher
-// Crear constraints de unicidad
-CREATE CONSTRAINT artist_id_unique IF NOT EXISTS FOR (a:Artist) REQUIRE a.id IS UNIQUE;
-CREATE CONSTRAINT track_id_unique IF NOT EXISTS FOR (t:Track) REQUIRE t.id IS UNIQUE;
-CREATE CONSTRAINT genre_unique IF NOT EXISTS FOR (g:Genre) REQUIRE g.name IS UNIQUE;
-CREATE CONSTRAINT country_unique IF NOT EXISTS FOR (c:Country) REQUIRE c.code IS UNIQUE;
-
-// Crear índices de búsqueda de texto
-CREATE INDEX artist_name_idx IF NOT EXISTS FOR (a:Artist) ON (a.name);
-CREATE INDEX track_name_idx IF NOT EXISTS FOR (t:Track) ON (t.name);
-
-// Crear índices compuestos para queries frecuentes
-CREATE INDEX country_timestamp_idx IF NOT EXISTS FOR (e:Event) ON (e.country, e.timestamp);
-```
-
-3. **Verificar**
-   ```cypher
-   SHOW CONSTRAINTS;
-   SHOW INDEXES;
-   ```
-
----
-
-### ✅ Paso 4: Ejecutar el Simulador de Streaming
+### ✅ Paso 3: Ejecutar el Simulador de Streaming
 
 1. **Instalar Dependencias Locales** (una sola vez)
    ```bash
@@ -404,16 +293,23 @@ CREATE INDEX country_timestamp_idx IF NOT EXISTS FOR (e:Event) ON (e.country, e.
 
 ---
 
-### ✅ Paso 5: Monitoreo en Airflow
+### ✅ Paso 4: Monitoreo en Airflow
 
 1. **Acceder al Panel Web de Airflow**
    - Abrir: `http://localhost:8080`
    - Credenciales:
-     - **Usuario**: `airflow`
-     - **Contraseña**: `airflow`
+     - **Usuario**: `admin`
+     - **Contraseña**: `CgHeZp4u3xqdqgWa`. 
+
+     o consultar con este comando 
+     ```bash 
+     docker exec airflow_utec sh -lc 'cat /opt/airflow/standalone_admin_password.txt'
+     ```
+   - La contraseña se genera al iniciar `standalone` y también queda disponible en:
+     - `/opt/airflow/standalone_admin_password.txt`
 
 2. **Activar el DAG**
-   - En la lista de DAGs, buscar: `pipeline_streaming`
+   - En la lista de DAGs, buscar: `pipeline_spotify_multimodelo`
    - Hacer clic en el **botón de encendido** (toggle) en la columna izquierda
    - El DAG ahora se ejecutará automáticamente cada 2 minutos
 
@@ -428,7 +324,7 @@ CREATE INDEX country_timestamp_idx IF NOT EXISTS FOR (e:Event) ON (e.country, e.
 
 ---
 
-### ✅ Paso 6: Lanzar el Dashboard Interactivo
+### ✅ Paso 5: Lanzar el Dashboard Interactivo
 
 1. **Instalar Dependencias del Dashboard** (si no se hizo en Paso 4)
    ```bash
@@ -455,6 +351,10 @@ CREATE INDEX country_timestamp_idx IF NOT EXISTS FOR (e:Event) ON (e.country, e.
    - Interactuar con gráficos y filtros
    - El dashboard actualiza automáticamente cada 5 segundos desde las BD NoSQL
 
+4. **Comprobar que el pipeline ya generó datos**
+   - Si el dashboard aún no muestra información, espera una o dos corridas del DAG
+   - Revisa en Airflow que las tareas `load_to_mongodb`, `load_to_cassandra` y `load_to_neo4j` hayan terminado en verde
+
 ---
 
 ## ✔️ Validación y Monitoreo
@@ -470,12 +370,12 @@ Después de completar todos los pasos, validar:
 
 - [ ] **MongoDB**: Conectado y con colección inicializada
   ```bash
-  docker exec -it mongodb mongosh --eval "db.spotify_analytics.spotify_events.countDocuments()"
+  docker exec -it mongodb_utec mongosh spotify_db --quiet --eval "db.raw_events.countDocuments()"
   ```
 
 - [ ] **Cassandra**: Keyspace y tabla creados
   ```bash
-  docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM spotify_keyspace.time_series_events;"
+  docker exec -it cassandra_utec cqlsh -e "SELECT COUNT(*) FROM spotify_analytics.streams_by_country_genre;"
   ```
 
 - [ ] **Neo4j**: Constraints creados
@@ -566,7 +466,7 @@ Acceder a través del dashboard para verificar:
 
 3. Verificar conectividad desde contenedor a BD:
    ```bash
-   docker exec -it airflow-webserver python -c \
+   docker exec -it airflow_utec python -c \
      "from pymongo import MongoClient; MongoClient('mongodb:27017').admin.command('ping')"
    ```
 

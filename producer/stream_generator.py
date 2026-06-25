@@ -8,7 +8,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(PROJECT_ROOT, "data", "raw", "spotify_dataset.csv")
 QUEUE_DIR = os.path.join(PROJECT_ROOT, "data", "queue")
 BATCH_SIZE = 100  # Cuántos registros enviar por "oleada"
-INTERVAL_SECONDS = 5  # Cada cuánto tiempo enviar una oleada
+INTERVAL_SECONDS = 20  # Cada cuánto tiempo enviar una oleada
 
 def simulate_streaming():
     # 1. Verificar que el archivo existe
